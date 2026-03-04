@@ -17,63 +17,70 @@ LINKS:
 
 Always use authoritative sources: PubMed, Mayo Clinic, CDC, WHO, National Geographic, Snopes, NASA, Scientific American, Harvard Health, Nature, Science journals, Wikipedia for introductory context, etc. Make sure URLs are plausible and real-looking for these domains. Format your response exactly as described above — no markdown, no asterisks.`;
 
-module.exports = async function (context, req) {
-  const { myth } = req.body || {};
+function callAnthropic(apiKey, myth) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1000,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: "user", content: `Fact-check this myth or claim: "${myth}"` }],
+    });
 
-  if (!myth) {
-    context.res = { status: 400, body: { error: "myth is required" } };
-    return;
-  }
-
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    context.res = { status: 500, body: { error: "ANTHROPIC_API_KEY not configured" } };
-    return;
-  }
-
-  const payload = JSON.stringify({
-    model: "claude-sonnet-4-5",
-    max_tokens: 1000,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: "user", content: `Fact-check this myth or claim: "${myth}"` }],
-  });
-
-  return new Promise((resolve) => {
-    const options = {
-      hostname: "api.anthropic.com",
-      path: "/v1/messages",
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "Content-Length": Buffer.byteLength(payload),
+    const req = https.request(
+      {
+        hostname: "api.anthropic.com",
+        path: "/v1/messages",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "Content-Length": Buffer.byteLength(payload),
+        },
       },
-    };
+      (res) => {
+        let data = "";
+        res.on("data", (chunk) => { data += chunk; });
+        res.on("end", () => {
+          try {
+            resolve({ status: res.statusCode, body: JSON.parse(data) });
+          } catch (e) {
+            reject(new Error("Failed to parse Anthropic response: " + data.slice(0, 200)));
+          }
+        });
+      }
+    );
 
-    const request = https.request(options, (res) => {
-      let data = "";
-      res.on("data", (chunk) => { data += chunk; });
-      res.on("end", () => {
-        try {
-          context.res = {
-            status: res.statusCode,
-            headers: { "Content-Type": "application/json" },
-            body: JSON.parse(data),
-          };
-        } catch {
-          context.res = { status: 500, body: { error: "Failed to parse Anthropic response" } };
-        }
-        resolve();
-      });
-    });
-
-    request.on("error", (e) => {
-      context.res = { status: 500, body: { error: e.message } };
-      resolve();
-    });
-
-    request.write(payload);
-    request.end();
+    req.on("error", reject);
+    req.write(payload);
+    req.end();
   });
+}
+
+module.exports = async function (context, req) {
+  try {
+    const { myth } = req.body || {};
+
+    if (!myth) {
+      context.res = { status: 400, body: { error: "myth is required" } };
+      return;
+    }
+
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      context.res = { status: 500, body: { error: "ANTHROPIC_API_KEY not configured" } };
+      return;
+    }
+
+    const { status, body } = await callAnthropic(apiKey, myth);
+
+    context.res = {
+      status,
+      headers: { "Content-Type": "application/json" },
+      body,
+    };
+  } catch (err) {
+    context.log("API error: " + err.message);
+    context.res = { status: 500, body: { error: err.message } };
+  }
 };
