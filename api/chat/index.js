@@ -1,3 +1,4 @@
+const { app } = require("@azure/functions");
 const https = require("https");
 
 const SYSTEM_PROMPT = `You are MythBuster AI — a rigorous fact-checker and myth debunker. When given a myth, claim, or question, you:
@@ -57,30 +58,36 @@ function callAnthropic(apiKey, myth) {
   });
 }
 
-module.exports = async function (context, req) {
-  try {
-    const { myth } = req.body || {};
+app.http("chat", {
+  methods: ["POST"],
+  authLevel: "anonymous",
+  handler: async (request, context) => {
+    try {
+      const body = await request.json();
+      const { myth } = body || {};
 
-    if (!myth) {
-      context.res = { status: 400, body: { error: "myth is required" } };
-      return;
+      if (!myth) {
+        return { status: 400, body: JSON.stringify({ error: "myth is required" }) };
+      }
+
+      const apiKey = process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) {
+        return { status: 500, body: JSON.stringify({ error: "ANTHROPIC_API_KEY not configured" }) };
+      }
+
+      const result = await callAnthropic(apiKey, myth);
+      return {
+        status: result.status,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(result.body),
+      };
+    } catch (err) {
+      context.log("Error: " + err.message);
+      return {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ error: err.message }),
+      };
     }
-
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      context.res = { status: 500, body: { error: "ANTHROPIC_API_KEY not configured" } };
-      return;
-    }
-
-    const { status, body } = await callAnthropic(apiKey, myth);
-
-    context.res = {
-      status,
-      headers: { "Content-Type": "application/json" },
-      body,
-    };
-  } catch (err) {
-    context.log("API error: " + err.message);
-    context.res = { status: 500, body: { error: err.message } };
-  }
-};
+  },
+});
