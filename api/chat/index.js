@@ -17,24 +17,26 @@ LINKS:
 
 Always use authoritative sources: PubMed, Mayo Clinic, CDC, WHO, National Geographic, Snopes, NASA, Scientific American, Harvard Health, Nature, Science journals, Wikipedia for introductory context, etc. Make sure URLs are plausible and real-looking for these domains. Format your response exactly as described above — no markdown, no asterisks.`;
 
-function callAnthropic(apiKey, myth) {
+function callGemini(apiKey, myth) {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1000,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: `Fact-check this myth or claim: "${myth}"` }],
+      system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: `Fact-check this myth or claim: "${myth}"` }],
+        },
+      ],
+      generationConfig: { maxOutputTokens: 1000 },
     });
 
     const req = https.request(
       {
-        hostname: "api.anthropic.com",
-        path: "/v1/messages",
+        hostname: "generativelanguage.googleapis.com",
+        path: `/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
           "Content-Length": Buffer.byteLength(payload),
         },
       },
@@ -43,9 +45,15 @@ function callAnthropic(apiKey, myth) {
         res.on("data", (chunk) => { data += chunk; });
         res.on("end", () => {
           try {
-            resolve({ status: res.statusCode, body: JSON.parse(data) });
+            const gemini = JSON.parse(data);
+            // Transform to Anthropic-compatible shape so the frontend needs no changes
+            const text = gemini.candidates?.[0]?.content?.parts?.[0]?.text || "";
+            resolve({
+              status: res.statusCode,
+              body: { content: [{ type: "text", text }] },
+            });
           } catch (e) {
-            reject(new Error("Failed to parse Anthropic response: " + data.slice(0, 200)));
+            reject(new Error("Failed to parse Gemini response: " + data.slice(0, 200)));
           }
         });
       }
@@ -70,17 +78,17 @@ module.exports = async function (context, req) {
       return;
     }
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
+    const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       context.res = {
         status: 500,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ error: "ANTHROPIC_API_KEY not configured" }),
+        body: JSON.stringify({ error: "GEMINI_API_KEY not configured" }),
       };
       return;
     }
 
-    const { status, body } = await callAnthropic(apiKey, myth);
+    const { status, body } = await callGemini(apiKey, myth);
     context.res = {
       status,
       headers: { "Content-Type": "application/json" },
