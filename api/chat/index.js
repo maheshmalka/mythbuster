@@ -1,4 +1,4 @@
-const Anthropic = require("@anthropic-ai/sdk");
+const https = require("https");
 
 const SYSTEM_PROMPT = `You are MythBuster AI — a rigorous fact-checker and myth debunker. When given a myth, claim, or question, you:
 
@@ -25,24 +25,55 @@ module.exports = async function (context, req) {
     return;
   }
 
-  try {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const message = await client.messages.create({
-      model: "claude-sonnet-4-5",
-      max_tokens: 1000,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: `Fact-check this myth or claim: "${myth}"` }],
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    context.res = { status: 500, body: { error: "ANTHROPIC_API_KEY not configured" } };
+    return;
+  }
+
+  const payload = JSON.stringify({
+    model: "claude-sonnet-4-5",
+    max_tokens: 1000,
+    system: SYSTEM_PROMPT,
+    messages: [{ role: "user", content: `Fact-check this myth or claim: "${myth}"` }],
+  });
+
+  return new Promise((resolve) => {
+    const options = {
+      hostname: "api.anthropic.com",
+      path: "/v1/messages",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "Content-Length": Buffer.byteLength(payload),
+      },
+    };
+
+    const request = https.request(options, (res) => {
+      let data = "";
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        try {
+          context.res = {
+            status: res.statusCode,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.parse(data),
+          };
+        } catch {
+          context.res = { status: 500, body: { error: "Failed to parse Anthropic response" } };
+        }
+        resolve();
+      });
     });
 
-    context.res = {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-      body: message,
-    };
-  } catch (err) {
-    context.res = {
-      status: err.status || 500,
-      body: { error: err.message },
-    };
-  }
+    request.on("error", (e) => {
+      context.res = { status: 500, body: { error: e.message } };
+      resolve();
+    });
+
+    request.write(payload);
+    request.end();
+  });
 };
